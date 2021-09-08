@@ -1,0 +1,371 @@
+---
+title: "SYMREP plots and analyses"
+author: "Anna Mankowski"
+date: "07/07/2021"
+output: html_document
+---
+
+```{r Load libraries}
+library(seqinr)
+library(readr)
+library(janitor)
+library(tidyverse)
+library(reshape2)
+library(Biostrings)
+library(patchwork)
+library(plyr)
+library(dplyr)
+library(coRdon)
+library(FSA)
+library(ggpmisc)
+```
+
+```{r Load data}
+clades<-read.csv("../data/symbiont_clades.csv", sep="\t", header=T)
+clade.list<-c("Gamma4", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11")
+
+GC.combined<-read.delim("../data/GC.combined.csv", sep=";", header=T)
+GC.combined$ORGANISM<-ifelse(grepl("Iexu", GC.combined$LIB), "Gamma4", "Kentron")
+GC.combined$LIB<-as.factor(GC.combined$LIB)
+GC.combined$CODE<-as.factor(GC.combined$CODE)
+GC.combined$ORGANISM<-as.factor(GC.combined$ORGANISM)
+GC.combined$GC<-as.numeric(GC.combined$GC)
+GC.combined<-merge(GC.combined, clades, by="LIB")
+GC.combined$CLADE<-as.factor(GC.combined$CLADE)
+GC.combined$CLADE<-factor(GC.combined$CLADE, levels=clade.list)
+
+GC.single_genes<-read.csv("../data/GC.single_genes.csv")
+GC.single_genes$ORGANISM<-ifelse(grepl("Iexu", GC.single_genes$LIB), "Gamma4", "Kentron")
+GC.single_genes$LIB<-as.factor(GC.single_genes$LIB)
+GC.single_genes$GENE<-as.factor(GC.single_genes$GENE)
+GC.single_genes$CODE<-as.factor(GC.single_genes$CODE)
+GC.single_genes$ORGANISM<-as.factor(GC.single_genes$ORGANISM)
+GC.single_genes$GC<-as.numeric(GC.single_genes$GC)
+GC.single_genes$LENGTH<-as.numeric(GC.single_genes$LENGTH)
+GC.single_genes<-merge(GC.single_genes, clades, by="LIB")
+GC.single_genes$CLADE<-as.factor(GC.single_genes$CLADE)
+GC.single_genes$CLADE<-factor(GC.single_genes$CLADE, levels=clade.list)
+
+GC.overall<-rbind(GC.combined, subset(GC.single_genes, select=-c(GENE, LENGTH)))
+GC.overall$CLADE.x<-NULL
+names(GC.overall)[6]<-"CLADE"
+
+genome_size<-read.csv("../data/genome_size.csv")
+gene_counts<-read.csv("../data/gene_counts.tsv", sep="\t", header=F)
+names(gene_counts)<-c("LIB", "GENE_COUNT")
+annotation_counts<-read.csv("../data/annotated_counts.tsv", sep="\t")
+hypothetical_counts<-read.csv("../data/hypothetical_counts.tsv", sep="\t")
+
+MEAN<-""
+for (i in 1:length(clade.list)){
+  clade<-clade.list[i]
+  NC.mean<-mean(subset(GC.overall, (CODE %in% "non-coding") & (CLADE %in% clade))$GC)
+  GC.mean<-mean(subset(GC.overall, (CODE %in% "GC") & (CLADE %in% clade))$GC)
+  GC3.mean<-mean(subset(GC.overall, (CODE %in% "GC3") & (CLADE %in% clade))$GC)
+  mean.tmp<-data.frame(clade, NC.mean, GC.mean, GC3.mean)
+  MEAN<-rbind(MEAN, mean.tmp)
+}
+MEAN<-MEAN[-1,]
+MEAN$clade<-as.factor(MEAN$clade)
+MEAN$NC.mean<-as.numeric(MEAN$NC.mean)
+MEAN$GC.mean<-as.numeric(MEAN$GC.mean)
+MEAN$GC3.mean<-as.numeric(MEAN$GC3.mean)
+MEAN$clade<-factor(MEAN$clade, levels=clade.list)
+MEAN$diff.NCGC<-100*(MEAN$NC.mean-MEAN$GC.mean)
+MEAN$diff.GCGC3<-100*(MEAN$GC3.mean-MEAN$GC.mean)
+
+mu<-ddply(GC.single_genes, "CLADE", summarise, grp.mean=mean(LENGTH))
+mu2<-ddply(GC.single_genes, "ORGANISM", summarise, grp.mean=mean(LENGTH))
+mu3<-ddply(GC.single_genes, "LIB", summarise, grp.mean=mean(LENGTH))
+
+tmp<-merge(genome_size, gene_counts, by="LIB")
+tmp<-merge(tmp, annotation_counts, by="LIB")
+tmp<-merge(tmp, hypothetical_counts, by="LIB")
+STATS<-merge(tmp, mu3, by ="LIB")
+rm(tmp)
+names(STATS)[6]<-"MEAN_LENGTH"
+STATS<-merge(STATS, clades, by="LIB")
+STATS$ORGANISM<-ifelse(grepl("Iexu", STATS$LIB), "Gamma4", "Kentron")
+STATS$P_ANNO<-100*(STATS$ANNO_COUNT/STATS$GENE_COUNT)
+
+annotations<-read.delim("../data/gene_annotations.csv", sep=";", header=F)
+names(annotations)<-c("GENE", "ANNO")
+GENES<-merge(subset(GC.single_genes, (CODE %in% "GC"))[c(1:2,5:8)], annotations, by="GENE")
+GENES$ANNO_GRP<-ifelse(grepl("hypothetical_protein", GENES$ANNO), "hypothetical", "annotated")
+
+MEAN_GENE_ANNO<-ddply(subset(GENES, (ANNO_GRP %in% "annotated")), "LIB", summarise, MEAN_ANNO=mean(LENGTH))
+MEAN_GENE_HYPO<-ddply(subset(GENES, (ANNO_GRP %in% "hypothetical")), "LIB", summarise, MEAN_HYPO=mean(LENGTH))
+MEAN_GENES<-merge(MEAN_GENE_ANNO, MEAN_GENE_HYPO, by="LIB")
+MEAN_GENES<-merge(MEAN_GENES, clades, by="LIB")
+MEAN_GENES$ORGANISM<-ifelse(grepl("Iexu", MEAN_GENES$LIB), "Gamma4", "Kentron")
+MEAN_GENES$MEAN_DIFF<-(MEAN_GENES$MEAN_ANNO-MEAN_GENES$MEAN_HYPO)
+MEAN_GENES<-merge(genome_size, MEAN_GENES, by="LIB")
+MEAN_GENES_MELT<-melt(MEAN_GENES)
+
+GAINED<-read.csv("../data/gained_by_species", header=F)
+names(GAINED)<-"GENE"
+GAINED<-merge(GENES, GAINED, by="GENE")
+
+GAINED_ANNO<-""
+for (i in 1:length(levels(GAINED$LIB))){
+  libname<-levels(GAINED$LIB)[i]
+  P_ANNO_GAINED<-100*(length(subset(GAINED, (LIB %in% libname) & (ANNO_GRP %in% "annotated"))$GENE)/length(subset(GAINED, (LIB %in% libname))$GENE))
+  anno.tmp<-data.frame(libname, P_ANNO_GAINED)
+  GAINED_ANNO<-rbind(GAINED_ANNO, anno.tmp)
+}
+GAINED_ANNO<-GAINED_ANNO[-1,]
+names(GAINED_ANNO)[1]<-"LIB"
+
+GAINED_LENGTH<-""
+for (i in 1:length(levels(GAINED$LIB))){
+  libname<-levels(GAINED$LIB)[i]
+  gained.length<-mean(subset(GAINED, (LIB %in% libname))$LENGTH)
+  mean.tmp<-data.frame(libname, gained.length)
+  GAINED_LENGTH<-rbind(GAINED_LENGTH, mean.tmp)
+}
+GAINED_LENGTH<-GAINED_LENGTH[-1,]
+names(GAINED_LENGTH)<-c("LIB", "GAINED_LENGTH")
+
+STATS<-merge(STATS, GAINED_ANNO, by="LIB")
+STATS<-merge(STATS, GAINED_LENGTH, by="LIB")
+STATS$P_ANNO_GAINED<-as.numeric(STATS$P_ANNO_GAINED)
+STATS$GAINED_LENGTH<-as.numeric(STATS$GAINED_LENGTH)
+
+MOBILE<-read.csv("../data/mobile_elements.csv", sep="\t", header=T)
+STATS<-merge(STATS, MOBILE, by="LIB")
+
+STATS$ORGANISM<-as.factor(STATS$ORGANISM)
+STATS$CLADE<-factor(STATS$CLADE, levels=clade.list)
+
+instrain.scaffolds<-read.delim("../data/inStrain.scaffold_info.combined.tsv", sep="\t", header=T)
+instrain.scaffolds<-merge(instrain.scaffolds, clades, by="LIB")
+instrain.scaffolds$CLADE<-factor(instrain.scaffolds$CLADE, levels=clade.list)
+instrain.scaffolds$ORGANISM<-ifelse(grepl("Iexu", instrain.scaffolds$LIB), "Gamma4", "Kentron")
+
+instrain.genome<-read.delim("../data/inStrain.genome_info.combined.tsv", sep="\t", header=T)
+instrain.genome<-merge(instrain.genome, clades, by="LIB")
+instrain.genome$CLADE<-factor(instrain.genome$CLADE, levels=clade.list)
+instrain.genome$ORGANISM<-ifelse(grepl("Iexu", instrain.genome$LIB), "Gamma4", "Kentron")
+instrain.genome<-merge(instrain.genome, STATS[,c(1:2)], by="LIB")
+
+pathways<-read.delim("../data/pathway_overview.tsv", sep="\t", header=F)
+names(pathways)<-c("LIB", "PATHWAY", "CLASS")
+pathways<-merge(pathways, clades, by="LIB")
+pathways$CLADE<-factor(pathways$CLADE, levels=clade.list)
+pathways$ORGANISM<-ifelse(grepl("Iexu", pathways$LIB), "Gamma4", "Kentron")
+```
+
+## PLOTTING
+
+```{r Plot GC content}
+GC.overall.clade<-ggplot(subset(GC.overall, CODE %in% c("overall", "non-coding", "GC", "GC3")), aes(x=CLADE, y=GC, fill=CODE)) + 
+  geom_boxplot(outlier.size=.1) +
+  scale_fill_grey(start=0.2, end=0.8) +
+  theme_classic() +
+  theme(axis.text.x=element_text(angle=90, hjust=1)) +
+  theme(text=element_text(size=5))
+
+GC.overall.host<-ggplot(subset(GC.overall, CODE %in% c("non-coding", "GC", "GC3")), aes(x=ORGANISM, y=GC, fill=CODE)) + 
+  geom_boxplot(outlier.size=.1) +
+  scale_fill_manual(values=c("non-coding"="#CCCCCC", "GC"="#9ababa", "GC3"="#069995")) +
+  theme_classic() +
+  theme(axis.text.x=element_text(angle=90, hjust=1)) +
+  theme(text=element_text(size=5))
+
+ggsave(GC.overall.clade, file="../plots/GC.patterns.eps", width=180, height=120, units="mm", dpi=300)
+
+
+GC.for_size<-merge(GC.overall, STATS[,c(1:2)], by="LIB")
+
+my.lm<-y~x
+
+GC.oversize<-ggplot(subset(GC.for_size, CODE %in% "overall"), aes(x=GENOME, y=GC)) + 
+  geom_point(size=5, aes(colour=ORGANISM)) +
+  geom_smooth(method='lm', formula=my.lm, color="black", linetype="dotted", size=0.5) +
+  stat_poly_eq(formula=my.lm, 
+              aes(label=..rr.label..), 
+              parse=TRUE) + 
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995"))  +
+  theme_classic() +
+  theme(axis.text.x=element_text(angle=90, hjust=1)) +
+  theme(text=element_text(size=5))
+
+GC.oversize
+
+ggsave(GC.oversize, file="../plots/GC.over-size.eps", width=180, height=120, units="mm", dpi=300)
+```
+
+```{r Plot genome size}
+genome.size.plot<-ggplot(STATS, aes(x=CLADE, y=GENOME, fill=ORGANISM)) + 
+  geom_boxplot(outlier.size=.1) +
+  scale_fill_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme_classic() +
+  theme(axis.text.x=element_text(angle=90, hjust=1)) +
+  theme(text=element_text(size=5))
+
+ggsave(genome.size.plot, file="../plots/genome-size.eps", width=180, height=120, units="mm", dpi=300)
+genome.size.plot
+```
+
+```{r Plot gene length distribution}
+length.distr.plot<-ggplot(subset(GC.single_genes, (CODE %in% "GC")),  aes(x=LENGTH)) + 
+  geom_histogram(aes(fill=ORGANISM), binwidth=100) + 
+  scale_fill_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995"))  +
+  facet_grid(CLADE ~ .) +
+  geom_vline(data=mu, aes(xintercept=grp.mean), colour="black", linetype="dashed") +
+  xlim(0, 3000) + 
+  theme_classic() +
+  theme(axis.text.x=element_text(angle=90, hjust=1)) +
+  theme(text=element_text(size=5))
+
+gene.count.plot<-ggplot() +
+  geom_point(data=STATS, aes(x=GENOME, y=GENE_COUNT, colour=ORGANISM), size=5) + 
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme_classic() +
+  theme(text=element_text(size=5))
+
+percent.anno.plot<-ggplot() +
+  geom_point(data=STATS, aes(x=GENOME, y=P_ANNO, colour=ORGANISM), size=5) + 
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme_classic() +
+  theme(text=element_text(size=5))
+
+gene.stats.plot<-(length.distr.plot | gene.count.plot / percent.anno.plot)
+ggsave(gene.stats.plot, file="../plots/gene.stats.eps", width=180, height=120, units="mm", dpi=300)
+gene.stats.plot
+```
+
+```{r Plot GC content}
+STATS.MELT<-melt(STATS)
+
+anno.diff.plot<-ggplot() +
+  geom_point(data=subset(STATS.MELT, variable %in% c("P_ANNO", "P_ANNO_GAINED")), aes(x=CLADE, y=value, colour=ORGANISM, shape=variable), size=5) +
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme_classic() +
+  theme(text=element_text(size=5))
+
+length.diff.plot<-ggplot() +
+  geom_point(data=subset(STATS.MELT, variable %in% c("MEAN_LENGTH", "GAINED_LENGTH")), aes(x=CLADE, y=value, colour=ORGANISM, shape=variable), size=5) +
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme_classic() +
+  theme(text=element_text(size=5))
+
+diff.plot<-(anno.diff.plot | length.diff.plot)
+ggsave(diff.plot, file="../plots/gained.diff..eps", width=180, height=120, units="mm", dpi=300)
+diff.plot
+```
+
+```{r Plot GC content}
+mobile.clade.plot<-ggplot() +
+  geom_point(data=STATS, aes(x=CLADE, size=GENOME, y=P_IS, colour=ORGANISM)) +
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme_classic() +
+  theme(text=element_text(size=5))
+
+my.lm<-y~x
+
+mobile.genome.plot<-ggplot(data=STATS, aes(x=GENOME, y=P_IS), size=5) +
+  geom_point(aes(colour=ORGANISM)) +
+  geom_smooth(method='lm', formula=my.lm, color="black", linetype="dotted", size=0.5) +
+  stat_poly_eq(formula=my.lm, 
+              aes(label=..rr.label..), 
+              parse=TRUE) +  
+  theme_classic() +
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme(text=element_text(size=5))
+
+mobile.plot<-( mobile.genome.plot | mobile.clade.plot)
+ggsave(mobile.plot, file="../plots/mobile.eps", width=180, height=120, units="mm", dpi=300)
+mobile.plot
+```
+
+```{r Plot inStrain results}
+SNVs.scaffolds.plot<-ggplot(data=instrain.scaffolds) + 
+  geom_boxplot(aes(x=CLADE, y=SNV_count/length, fill=ORGANISM)) +
+    theme_classic() +
+  scale_fill_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme(text=element_text(size=5))
+
+SNVs.scaffolds.plot
+
+SNVs.genome.plot<-ggplot(data=instrain.genome) + 
+  geom_point(aes(x=CLADE, y=(SNV_count/GENOME)*1000, colour=ORGANISM), size=5) +
+    theme_classic() +
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme(text=element_text(size=7))
+
+ggsave(SNVs.genome.plot, file="../plots/snvs.genome.eps", width=180, height=120, units="mm", dpi=300)
+SNVs.genome.plot
+```
+
+```{r Plot pathways distirbution}
+pathway.plot<-ggplot(pathways, aes(x=CLADE, y=fct_rev(PATHWAY), colour=ORGANISM)) +
+  geom_count() +
+  scale_size_area() +
+  theme_classic() +
+  scale_colour_manual(values=c("Kentron"="#9ababa", "Gamma4"="#069995")) +
+  theme(text=element_text(size=7)) +
+  scale_size_continuous(breaks=c(1,3,6))
+
+
+
+ggsave(pathway.plot, file="../plots/pathway.dist.eps", width=180, height=210, units="mm", dpi=300)
+pathway.plot
+```
+
+## STATISTICS
+
+```{r Calculate difference between GC content}
+GC.overall.sub<-subset(GC.overall, CODE %in% c("non-coding", "GC", "GC3"))
+set.seed(0)
+for (i in 1:length(levels(GC.overall.sub$CODE))) {
+  tryCatch({
+    print(levels(GC.overall.sub$CODE)[i])
+    kt<-kruskal.test(GC ~ CLADE, data=GC.overall.sub[GC.overall.sub$CODE==levels(GC.overall.sub$CODE)[i],])
+    print(kt)
+    }, error=function(e){cat("ERROR:",conditionMessage(e), "\n")})
+}
+
+dt.NC<-dunnTest(GC ~ CLADE, data=GC.overall.sub[GC.overall.sub$CODE=="non-coding",], method="bonferroni")$res[c(1,4)]
+dt.NC$CODE<-"non-coding"
+
+dt.GC<-dunnTest(GC ~ CLADE, data=GC.overall.sub[GC.overall.sub$CODE=="GC",], method="bonferroni")$res[c(1,4)]
+dt.GC$CODE<-"GC"
+
+dt.GC3<-dunnTest(GC ~ CLADE, data=GC.overall.sub[GC.overall.sub$CODE=="GC3",], method="bonferroni")$res[c(1,4)]
+dt.GC3$CODE<-"GC3"
+
+dt.GC.overall<-rbind(dt.NC, dt.GC, dt.GC3)
+```
+
+```{r Calculate difference between mean gene length}
+set.seed(0)
+
+kt.length<-kruskal.test(grp.mean ~ CLADE, data=mu)
+kt.length
+```
+
+```{r Calculate difference between genome}
+set.seed(0)
+
+kt.grp<-kruskal.test(GENOME ~ GROUP, data=STATS)
+kt.grp
+
+kt.clade<-kruskal.test(GENOME ~ CLADE, data=STATS)
+kt.clade
+
+dt.clade<-as.data.frame(dunnTest(GENOME ~ CLADE, data=STATS, method="bonferroni")$res[c(1,4)])
+```
+
+
+```{r Calculate SNV differences between samples}
+set.seed(0)
+
+kt.instrain.group<-kruskal.test(SNV_count/GENOME ~ ORGANISM, data=instrain.genome)
+kt.instrain.group
+
+kt.instrain.clade<-kruskal.test(SNV_count/GENOME ~ CLADE, data=instrain.genome)
+kt.instrain.clade
+
+dt.instrain.clade<-as.data.frame(dunnTest(SNV_count/GENOME ~ CLADE, data=instrain.genome, method="bonferroni")$res[c(1,4)])
+```
